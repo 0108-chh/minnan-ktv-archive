@@ -13,13 +13,16 @@ import re
 import subprocess
 import sys
 import time
+import urllib.request
 from pathlib import Path
 
 BATCH = int(os.environ.get("BATCH_SIZE", "30"))
 COOKIE = os.environ.get("BILI_COOKIE", "").strip()
+UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
 TAG = "mv-archive"
 DL = Path("downloads")
 DL.mkdir(exist_ok=True)
+COOKIE_FILE = Path(".cookies.txt")
 
 
 def gh(*args):
@@ -32,12 +35,47 @@ def sanitize(title: str) -> str:
     return t[:100]
 
 
-if COOKIE:
-    # Netscape-format cookie file carrying SESSDATA for higher-quality streams
-    Path(".cookies.txt").write_text(
-        ".bilibili.com\tTRUE\t/\tTRUE\t0\tSESSDATA\t" + COOKIE + "\n",
-        encoding="utf-8",
-    )
+def get_anonymous_buvid():
+    """Ask Bilibili's fingerprint API for an anonymous buvid3/buvid4.
+
+    The HTTP 412 anti-bot block hits requests that carry no buvid cookie,
+    which is the case for fresh datacenter IPs. This call usually succeeds
+    even from cloud IPs because it is the same call a first-time browser
+    visitor makes.
+    """
+    try:
+        req = urllib.request.Request(
+            "https://api.bilibili.com/x/frontend/finger/spi",
+            headers={"User-Agent": UA, "Referer": "https://www.bilibili.com/"},
+        )
+        data = json.load(urllib.request.urlopen(req, timeout=20))
+        if data.get("code") == 0:
+            b3 = data["data"].get("b_3", "")
+            b4 = data["data"].get("b_4", "")
+            print(f"got anonymous buvid3={b3[:12]}... buvid4={b4[:12]}...")
+            return b3, b4
+        print("finger/spi code != 0:", data.get("code"), data.get("message"))
+    except Exception as e:  # noqa: BLE001
+        print("finger/spi failed:", e)
+    return "", ""
+
+
+def build_cookie_file():
+    lines = []
+    b3, b4 = get_anonymous_buvid()
+    if b3:
+        lines.append(f".bilibili.com\tTRUE\t/\tTRUE\t2147483647\tbuvid3\t{b3}")
+        lines.append(f".bilibili.com\tTRUE\t/\tFALSE\t2147483647\tbuvid4\t{b4}")
+    if COOKIE:
+        lines.append(f".bilibili.com\tTRUE\t/\tTRUE\t2147483647\tSESSDATA\t{COOKIE}")
+    if lines:
+        COOKIE_FILE.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        print(f"cookie file written with {len(lines)} entries")
+    else:
+        print("no cookies available, proceeding without")
+
+
+build_cookie_file()
 
 items = json.loads(Path("mvs/mv_list.json").read_text(encoding="utf-8"))
 
@@ -71,6 +109,10 @@ for it, name in batch:
     cmd = [
         "yt-dlp",
         "--no-playlist",
+        "--impersonate",
+        "chrome",
+        "--add-header",
+        f"Referer=https://www.bilibili.com/",
         "-f",
         "bv*[height<=1080]+ba/b",
         "--merge-output-format",
@@ -81,8 +123,8 @@ for it, name in batch:
         "-o",
         str(DL / f"{bvid}.%(ext)s"),
     ]
-    if COOKIE:
-        cmd += ["--cookies", ".cookies.txt"]
+    if COOKIE_FILE.exists():
+        cmd += ["--cookies", str(COOKIE_FILE)]
     cmd.append(url)
 
     print(f"==> [{len(ok_files)+len(failed)+1}/{len(batch)}] {name}", flush=True)

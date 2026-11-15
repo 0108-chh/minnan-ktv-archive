@@ -1,0 +1,40 @@
+name: Download Minnan MVs
+
+on:
+  workflow_dispatch:
+    inputs:
+      batch_size:
+        description: "Number of MVs to download this run"
+        required: false
+        default: "30"
+  schedule:
+    # every 3 hours, automatically keeps going until the list is finished
+    - cron: "0 */3 * * *"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: download-mv
+  cancel-in-progress: false
+
+jobs:
+  download:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install yt-dlp
+        run: pip install -U yt-dlp
+
+      - name: Download batch and upload to Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BATCH_SIZE: ${{ github.event.inputs.batch_size || '30' }}
+          BILI_COOKIE: ${{ secrets.BILI_COOKIE }}
+        run: python scripts/download_batch.py

@@ -30,7 +30,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install yt-dlp
-        run: pip install -U yt-dlp
+        run: pip install -U "yt-dlp[default,curl-cffi]"
 
       - name: Download batch and upload to Release
         env:
